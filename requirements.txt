@@ -1,3 +1,3 @@
-python-telegram-bot==20.8
+python-telegram-bot>=20.9
 aiohttp
 aiocron
