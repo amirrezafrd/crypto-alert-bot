@@ -26,11 +26,13 @@ def save_data(data):
 def get_binance_price(symbol):
     try:
         res = requests.get(f"https://api.binance.com/api/v3/ticker/price?symbol={symbol.upper()}USDT")
-        return float(res.json()["price"])
+        if res.status_code == 200 and "price" in res.json():
+            return float(res.json()["price"])
     except:
-        return None
+        pass
+    return None
 
-# --- Command /start ---
+# --- /start command ---
 @dp.message(commands=["start"])
 async def start(message: types.Message):
     user_id = str(message.from_user.id)
@@ -45,7 +47,7 @@ async def start(message: types.Message):
     kb.button(text="⚙️ ثبت سقف و کف", callback_data="set_alert")
 
     await message.answer(
-        "سلام 👋\nبه ربات قیمت‌ لحظه‌ای ارز دیجیتال خوش اومدی!",
+        "سلام 👋\nبه ربات قیمت لحظه‌ای ارز دیجیتال خوش اومدی!",
         reply_markup=kb.as_markup()
     )
 
@@ -65,7 +67,6 @@ async def process_coin_name(message: types.Message):
         return
 
     coin = message.text.strip().upper()
-    # تبدیل اسم کامل به نماد معروف
     mapping = {"BITCOIN": "BTC", "ETHEREUM": "ETH", "BNB": "BNB"}
     if coin in mapping:
         coin = mapping[coin]
@@ -92,13 +93,10 @@ async def show_prices(callback: types.CallbackQuery):
         await callback.message.answer("❌ هنوز هیچ ارزی اضافه نکردی.")
         return
 
-    msg = "💰 قیمت لحظه‌ای ارزها:\n"
+    msg = "💰 قیمت لحظه‌ای:\n"
     for coin in coins:
         price = get_binance_price(coin)
-        if price:
-            msg += f"{coin} = {price:.2f}$\n"
-        else:
-            msg += f"{coin} = ❌ نامعتبر\n"
+        msg += f"{coin} = {price:.2f}$\n" if price else f"{coin} = ❌ نامعتبر\n"
 
     await callback.message.answer(msg)
 
@@ -143,7 +141,7 @@ async def process_floor(message: types.Message, coin, ceiling):
     await message.answer(f"✅ هشدار برای {coin} ثبت شد.\n"
                          f"سقف: {ceiling or '❌'} | کف: {floor or '❌'}")
 
-# --- بررسی مداوم قیمت‌ها ---
+# --- بررسی مداوم سقف/کف ---
 async def check_alerts():
     while True:
         data = load_data()
@@ -160,7 +158,7 @@ async def check_alerts():
         save_data(data)
         await asyncio.sleep(CHECK_INTERVAL)
 
-# --- Run bot ---
+# --- اجرای اصلی ---
 async def main():
     asyncio.create_task(check_alerts())
     await dp.start_polling(bot)
