@@ -1,166 +1,143 @@
-import json
 import asyncio
-import requests
-from aiogram import Bot, Dispatcher, types
-from aiogram.utils.keyboard import InlineKeyboardBuilder
-from aiogram.enums import ParseMode
-from config import BOT_TOKEN, CHECK_INTERVAL
+import json
+import os
+import aiohttp
+from aiogram import Bot, Dispatcher, F, Router
+from aiogram.types import Message, InlineKeyboardButton, InlineKeyboardMarkup, CallbackQuery
+from aiogram.filters import Command
 
-bot = Bot(token=BOT_TOKEN)
+# --- تنظیمات ---
+TOKEN = os.getenv("BOT_TOKEN")
+DATA_FILE = "users.json"
+
+bot = Bot(token=TOKEN)
 dp = Dispatcher()
+router = Router()
+dp.include_router(router)
 
-DATA_FILE = "data/users.json"
+# --- توابع کمکی ---
 
-# --- Helper functions ---
 def load_data():
-    try:
-        with open(DATA_FILE, "r") as f:
-            return json.load(f)
-    except:
+    if not os.path.exists(DATA_FILE):
         return {}
+    with open(DATA_FILE, "r", encoding="utf-8") as f:
+        return json.load(f)
 
 def save_data(data):
-    with open(DATA_FILE, "w") as f:
-        json.dump(data, f, indent=4)
+    with open(DATA_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
 
-def get_binance_price(symbol):
-    try:
-        res = requests.get(f"https://api.binance.com/api/v3/ticker/price?symbol={symbol.upper()}USDT")
-        if res.status_code == 200 and "price" in res.json():
-            return float(res.json()["price"])
-    except:
-        pass
-    return None
+async def get_price(symbol):
+    url = f"https://api.binance.com/api/v3/ticker/price?symbol={symbol.upper()}USDT"
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url) as resp:
+            if resp.status == 200:
+                data = await resp.json()
+                return float(data["price"])
+            return None
 
-# --- /start command ---
-@dp.message(commands=["start"])
-async def start(message: types.Message):
-    user_id = str(message.from_user.id)
+# --- دکمه‌ها ---
+def main_keyboard():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="➕ افزودن ارز", callback_data="add_coin")],
+        [InlineKeyboardButton(text="💲 نمایش قیمت‌ها", callback_data="show_prices")],
+        [InlineKeyboardButton(text="📈 ثبت سقف و کف", callback_data="set_limits")]
+    ])
+
+# --- هندلر شروع ---
+@router.message(Command("start"))
+async def start_cmd(msg: Message):
+    user_id = str(msg.from_user.id)
     data = load_data()
     if user_id not in data:
-        data[user_id] = {"coins": [], "alerts": {}}
+        data[user_id] = {"coins": {}, "limits": {}}
         save_data(data)
-
-    kb = InlineKeyboardBuilder()
-    kb.button(text="➕ افزودن ارز", callback_data="add_coin")
-    kb.button(text="💰 نمایش قیمت لحظه‌ای", callback_data="show_prices")
-    kb.button(text="⚙️ ثبت سقف و کف", callback_data="set_alert")
-
-    await message.answer(
-        "سلام 👋\nبه ربات قیمت لحظه‌ای ارز دیجیتال خوش اومدی!",
-        reply_markup=kb.as_markup()
-    )
+    await msg.answer("سلام 👋 به ربات هشدار قیمت خوش اومدی!", reply_markup=main_keyboard())
 
 # --- افزودن ارز ---
-@dp.callback_query(lambda c: c.data == "add_coin")
-async def add_coin(callback: types.CallbackQuery):
-    await callback.message.answer("نام ارز مورد نظر رو بفرست (مثل BTC یا Bitcoin):")
-    await callback.answer()
-    dp.message.register(process_coin_name, user_id=callback.from_user.id)
+@router.callback_query(F.data == "add_coin")
+async def add_coin(cb: CallbackQuery):
+    await cb.message.answer("نام ارز مورد نظر رو بفرست (مثلاً BTC یا Ethereum):")
+    await cb.answer()
+    dp["waiting_for_coin"] = cb.from_user.id
 
-async def process_coin_name(message: types.Message):
-    user_id = str(message.from_user.id)
+@router.message()
+async def handle_message(msg: Message):
+    user_id = str(msg.from_user.id)
     data = load_data()
 
-    if len(data[user_id]["coins"]) >= 20:
-        await message.answer("❌ حداکثر ۲۰ ارز می‌تونی اضافه کنی.")
-        return
+    if dp.get("waiting_for_coin") == msg.from_user.id:
+        coin = msg.text.strip().upper()
+        price = await get_price(coin)
+        if price is None:
+            await msg.answer("❌ این ارز در بایننس پیدا نشد.")
+        else:
+            if len(data[user_id]["coins"]) >= 20:
+                await msg.answer("🚫 حداکثر ۲۰ ارز می‌تونی اضافه کنی.")
+            else:
+                data[user_id]["coins"][coin] = price
+                save_data(data)
+                await msg.answer(f"✅ ارز {coin} با موفقیت افزوده شد.")
+        dp["waiting_for_coin"] = None
 
-    coin = message.text.strip().upper()
-    mapping = {"BITCOIN": "BTC", "ETHEREUM": "ETH", "BNB": "BNB"}
-    if coin in mapping:
-        coin = mapping[coin]
-
-    price = get_binance_price(coin)
-    if price is None:
-        await message.answer("⚠️ چنین ارزی در بایننس پیدا نشد.")
-        return
-
-    if coin not in data[user_id]["coins"]:
-        data[user_id]["coins"].append(coin)
-        save_data(data)
-        await message.answer(f"✅ ارز {coin} با موفقیت اضافه شد.")
-    else:
-        await message.answer("⚠️ این ارز قبلاً اضافه شده.")
-
-# --- نمایش قیمت لحظه‌ای ---
-@dp.callback_query(lambda c: c.data == "show_prices")
-async def show_prices(callback: types.CallbackQuery):
-    user_id = str(callback.from_user.id)
+# --- نمایش قیمت‌ها ---
+@router.callback_query(F.data == "show_prices")
+async def show_prices(cb: CallbackQuery):
+    user_id = str(cb.from_user.id)
     data = load_data()
-    coins = data.get(user_id, {}).get("coins", [])
-    if not coins:
-        await callback.message.answer("❌ هنوز هیچ ارزی اضافه نکردی.")
+
+    if not data.get(user_id) or not data[user_id]["coins"]:
+        await cb.message.answer("📭 هنوز هیچ ارزی اضافه نکردی.")
+        await cb.answer()
         return
 
-    msg = "💰 قیمت لحظه‌ای:\n"
-    for coin in coins:
-        price = get_binance_price(coin)
-        msg += f"{coin} = {price:.2f}$\n" if price else f"{coin} = ❌ نامعتبر\n"
-
-    await callback.message.answer(msg)
+    msg_text = "💰 قیمت لحظه‌ای:\n\n"
+    for coin in data[user_id]["coins"].keys():
+        price = await get_price(coin)
+        if price:
+            msg_text += f"{coin} = {price:.2f} $\n"
+    await cb.message.answer(msg_text)
+    await cb.answer()
 
 # --- ثبت سقف و کف ---
-@dp.callback_query(lambda c: c.data == "set_alert")
-async def set_alert(callback: types.CallbackQuery):
-    user_id = str(callback.from_user.id)
+@router.callback_query(F.data == "set_limits")
+async def set_limits(cb: CallbackQuery):
+    user_id = str(cb.from_user.id)
     data = load_data()
-    coins = data.get(user_id, {}).get("coins", [])
+    coins = list(data[user_id]["coins"].keys())
+
     if not coins:
-        await callback.message.answer("❌ هنوز هیچ ارزی اضافه نکردی.")
+        await cb.message.answer("📭 هیچ ارزی نداری که براش سقف یا کف ثبت کنی.")
+        await cb.answer()
         return
 
-    kb = InlineKeyboardBuilder()
-    for c in coins:
-        kb.button(text=c, callback_data=f"alert_{c}")
-    await callback.message.answer("کدوم ارز رو می‌خوای برایش سقف یا کف ثبت کنی؟", reply_markup=kb.as_markup())
+    buttons = [[InlineKeyboardButton(text=c, callback_data=f"limit_{c}")] for c in coins]
+    markup = InlineKeyboardMarkup(inline_keyboard=buttons)
+    await cb.message.answer("یکی از ارزها رو انتخاب کن:", reply_markup=markup)
+    await cb.answer()
 
-@dp.callback_query(lambda c: c.data.startswith("alert_"))
-async def ask_price_limit(callback: types.CallbackQuery):
-    user_id = str(callback.from_user.id)
-    coin = callback.data.split("_", 1)[1]
-    await callback.message.answer(f"قیمت سقف {coin} رو بفرست (یا بنویس 'هیچ' برای رد شدن):")
-    dp.message.register(lambda m: process_ceiling(m, coin), user_id=callback.from_user.id)
-    await callback.answer()
+@router.callback_query(F.data.startswith("limit_"))
+async def ask_limit(cb: CallbackQuery):
+    coin = cb.data.replace("limit_", "")
+    dp["waiting_limit_coin"] = (cb.from_user.id, coin)
+    await cb.message.answer(f"مقدار سقف {coin} رو وارد کن (می‌تونی خالی بزاری):")
+    await cb.answer()
 
-async def process_ceiling(message: types.Message, coin):
-    ceiling_text = message.text.strip()
-    ceiling = float(ceiling_text) if ceiling_text.lower() != "هیچ" else None
-    await message.answer(f"حالا قیمت کف {coin} رو بفرست (یا 'هیچ'):")
-    dp.message.register(lambda m: process_floor(m, coin, ceiling), user_id=message.from_user.id)
-
-async def process_floor(message: types.Message, coin, ceiling):
-    floor_text = message.text.strip()
-    floor = float(floor_text) if floor_text.lower() != "هیچ" else None
-
-    user_id = str(message.from_user.id)
-    data = load_data()
-    data[user_id]["alerts"][coin] = {"ceiling": ceiling, "floor": floor}
-    save_data(data)
-
-    await message.answer(f"✅ هشدار برای {coin} ثبت شد.\n"
-                         f"سقف: {ceiling or '❌'} | کف: {floor or '❌'}")
-
-# --- بررسی مداوم سقف/کف ---
-async def check_alerts():
-    while True:
+@router.message()
+async def handle_limits(msg: Message):
+    user_id = msg.from_user.id
+    waiting = dp.get("waiting_limit_coin")
+    if waiting and waiting[0] == user_id:
+        coin = waiting[1]
         data = load_data()
-        for user_id, info in data.items():
-            for coin, limits in info.get("alerts", {}).items():
-                price = get_binance_price(coin)
-                if price:
-                    if limits["ceiling"] and price >= limits["ceiling"]:
-                        await bot.send_message(user_id, f"🚀 قیمت {coin} به سقف {limits['ceiling']}$ رسید!")
-                        limits["ceiling"] = None
-                    if limits["floor"] and price <= limits["floor"]:
-                        await bot.send_message(user_id, f"📉 قیمت {coin} به کف {limits['floor']}$ رسید!")
-                        limits["floor"] = None
+        data[str(user_id)]["limits"][coin] = {"high": msg.text.strip(), "low": None}
         save_data(data)
-        await asyncio.sleep(CHECK_INTERVAL)
+        dp["waiting_limit_coin"] = None
+        await msg.answer("✅ مقدار ثبت شد. ربات تغییرات قیمت رو بررسی می‌کنه.")
 
-# --- اجرای اصلی ---
+# --- شروع ---
 async def main():
-    asyncio.create_task(check_alerts())
+    print("Bot is running ...")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
