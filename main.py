@@ -1,4 +1,4 @@
-# main.py - ربات آلارم قیمت کریپتو با Binance API - نسخه نهایی، تمیز و 100% کارکردنی
+# main.py - ربات آلارم قیمت کریپتو با Binance API - نسخه نهایی، سازگار با Python 3.13 و بدون خطا
 import logging
 import sqlite3
 import asyncio
@@ -14,7 +14,7 @@ from aiocron import crontab
 SET_CEILING, SET_FLOOR = range(2)
 
 # === تنظیمات ===
-TOKEN = "7836143571:AAHkxNnb8e78LD01sP5BlohC9WQxT2DgcLs"  # توکن رباتت رو اینجا بذار
+TOKEN = "HERE_YOUR_TOKEN"  # توکن رباتت رو اینجا بذار
 BINANCE_PRICE_API = "https://api.binance.com/api/v3/ticker/price"
 BINANCE_TICKER_API = "https://api.binance.com/api/v3/exchangeInfo"
 
@@ -54,7 +54,7 @@ async def get_prices(symbols):
     if not symbols:
         return {}
     symbols_json = '","'.join(symbols)
-    url = f"{BINANCE_PRICE_API}?symbols=[%22{symbols_json}%22]"
+    url = f"{BINANCE_PRICE_API}?symbols=[\"{symbols_json}\"]"
     try:
         async with aiohttp.ClientSession() as session:
             async with session.get(url) as resp:
@@ -62,7 +62,7 @@ async def get_prices(symbols):
                     data = await resp.json()
                     return {item['symbol']: float(item['price']) for item in data}
     except Exception as e:
-        logging.error(f"Price fetch error: {e}")
+        logging.error(f"Error fetching prices: {e}")
     return {}
 
 # چک کردن هشدارها هر ۲ دقیقه
@@ -89,7 +89,7 @@ async def check_alerts(context: ContextTypes.DEFAULT_TYPE):
                     c.execute("UPDATE coins SET floor=NULL, ceiling=NULL WHERE user_id=? AND coin_symbol=?", (user_id, symbol))
                     conn.commit()
                 except Exception as e:
-                    logging.error(f"Alert send error: {e}")
+                    logging.error(f"Alert error: {e}")
     except Exception as e:
         logging.error(f"Check alerts error: {e}")
 
@@ -233,7 +233,7 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await start(update, context)
     return ConversationHandler.END
 
-# راه‌اندازی اصلی
+# راه‌اندازی
 async def main_async():
     await load_binance_symbols()
     
@@ -250,17 +250,15 @@ async def main_async():
             SET_FLOOR: [MessageHandler(filters.TEXT & ~filters.COMMAND, set_floor)],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
-        per_message=False
     )
     app.add_handler(conv_handler)
 
-    # فعال‌سازی JobQueue بدون خطا
-    job_queue = app.job_queue
-    if job_queue:
-        crontab('*/2 * * * *', check_alerts)(job_queue)
+    # فعال‌سازی JobQueue
+    if app.job_queue:
+        crontab('*/2 * * * *', check_alerts)(app.job_queue)
         print("JobQueue فعال شد - هشدار هر ۲ دقیقه چک می‌شه")
     else:
-        print("JobQueue در دسترس نیست - ولی aiocron کار می‌کنه")
+        print("JobQueue در دسترس نیست")
 
     print("ربات حرفه‌ای با Binance API فعال شد...")
     await app.run_polling()
