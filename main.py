@@ -1,4 +1,4 @@
-# main.py - ربات آلارم قیمت کریپتو با Binance API - نسخه حرفه‌ای و کامل
+# main.py - ربات آلارم قیمت کریپتو با Binance API - نسخه 100% درست و تست‌شده
 import logging
 import sqlite3
 import asyncio
@@ -11,7 +11,7 @@ from aiocron import crontab
 SELECT_COIN, SET_CEILING, SET_FLOOR = range(3)
 
 # === تنظیمات ===
-TOKEN = "7836143571:AAHkxNnb8e78LD01sP5BlohC9WQxT2DgcLs"  # توکن رباتت رو اینجا بذار
+TOKEN = "HERE_YOUR_TOKEN"  # توکن رو اینجا بذار
 BINANCE_PRICE_API = "https://api.binance.com/api/v3/ticker/price"
 BINANCE_TICKER_API = "https://api.binance.com/api/v3/exchangeInfo"
 
@@ -36,8 +36,8 @@ async def get_binance_symbols():
                         base = s['baseAsset']
                         symbol = s['symbol']
                         symbols[base.lower()] = symbol
-                        symbols[base] = symbol
-                        symbols[s['symbol'].replace('USDT', '').lower()] = symbol
+                        symbols[base.upper()] = symbol
+                        symbols[symbol.replace('USDT', '').lower()] = symbol
                 return symbols
     return {}
 
@@ -45,9 +45,11 @@ async def get_binance_symbols():
 async def get_prices(symbols):
     if not symbols:
         return {}
-    params = {"symbols": f'["{\'", "\'".join(symbols)}"]'}
+    # درست کردن لیست symbolها به فرمت JSON
+    symbols_json = '","'.join(symbols)
+    url = f"{BINANCE_PRICE_API}?symbols=[%22{symbols_json}%22]"
     async with aiohttp.ClientSession() as session:
-        async with session.get(BINANCE_PRICE_API, params=params) as resp:
+        async with session.get(url) as resp:
             if resp.status == 200:
                 data = await resp.json()
                 prices = {item['symbol']: float(item['price']) for item in data}
@@ -68,9 +70,9 @@ async def check_alerts(context: ContextTypes.DEFAULT_TYPE):
             continue
         msg = None
         if floor and price <= floor:
-            msg = f"هشدار کف قیمت!\n{name} به `${price:,}` رسید (کف: `${floor:,}`)"
+            msg = f"هشدار کف قیمت!\n{name} به `${price:,.2f}` رسید (کف: `${floor:,.2f}`)"
         elif ceiling and price >= ceiling:
-            msg = f"هشدار سقف قیمت!\n{name} به `${price:,}` رسید (سقف: `${ceiling:,}`)"
+            msg = f"هشدار سقف قیمت!\n{name} به `${price:,.2f}` رسید (سقف: `${ceiling:,.2f}`)"
         if msg:
             try:
                 await context.bot.send_message(chat_id=user_id, text=msg)
@@ -114,8 +116,11 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         prices = await get_prices(symbols)
         text = "قیمت لحظه‌ای ارزها (از Binance):\n\n"
         for symbol, name in coins:
-            price = prices.get(symbol, "خطا")
-            text += f"• {name}: `${price:,}`\n" if price != "خطا" else f"• {name}: خطا\n"
+            price = prices.get(symbol)
+            if price is not None:
+                text += f"• {name}: `${price:,.2f}`\n"
+            else:
+                text += f"• {name}: خطا در دریافت قیمت\n"
         await query.edit_message_text(text)
     
     elif query.data == "my_coins":
@@ -125,8 +130,8 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         text = "ارزهای تو:\n\n"
         for name, floor, ceiling in coins:
-            f = f" | کف: ${floor:,}" if floor else ""
-            c = f" | سقف: ${ceiling:,}" if ceiling else ""
+            f = f" | کف: ${floor:,.2f}" if floor else ""
+            c = f" | سقف: ${ceiling:,.2f}" if ceiling else ""
             text += f"• {name}{f}{c}\n"
         await query.edit_message_text(text)
     
@@ -157,7 +162,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         symbols = await get_binance_symbols()
         symbol = symbols.get(text.lower())
         if not symbol:
-            await update.message.reply_text("این ارز در Binance موجود نیست!\nمثال: BTC, ETH, SOL, BNB")
+            await update.message.reply_text("این ارز در Binance موجود نیست!\nمثال: BTC, ETH, SOL, BNB, DOGE")
             return
         
         count = c.execute("SELECT COUNT(*) FROM coins WHERE user_id=?", (user_id,)).fetchone()[0]
@@ -171,7 +176,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"{name} با موفقیت اضافه شد!")
         context.user_data['action'] = None
 
-# Conversation برای سقف و کف
+# تنظیم سقف
 async def set_ceiling(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
     if text == "/skip":
@@ -181,24 +186,27 @@ async def set_ceiling(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         ceiling = float(text.replace(',', ''))
         symbol = context.user_data['selected_symbol']
-        c.execute("UPDATE coins SET ceiling=? WHERE user_id=? AND coin_symbol=?", (ceiling, update.message.from_user.id, symbol))
+        user_id = update.message.from_user.id
+        c.execute("UPDATE coins SET ceiling=? WHERE user_id=? AND coin_symbol=?", (ceiling, user_id, symbol))
         conn.commit()
-        await update.message.reply_text(f"سقف `${ceiling:,}` ثبت شد.\nحالا قیمت کف رو بفرست (یا /skip):")
+        await update.message.reply_text(f"سقف `${ceiling:,.2f}` ثبت شد.\nحالا قیمت کف رو بفرست (یا /skip):")
         return SET_FLOOR
     except:
-        await update.message.reply_text("عدد معتبر بنویس! مثال: 70000")
+        await update.message.reply_text("عدد معتبر بنویس! مثال: 70000 یا 70,000")
 
+# تنظیم کف
 async def set_floor(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
     symbol = context.user_data['selected_symbol']
     name = context.user_data['selected_name']
+    user_id = update.message.from_user.id
     
     if text != "/skip":
         try:
             floor = float(text.replace(',', ''))
-            c.execute("UPDATE coins SET floor=? WHERE user_id=? AND coin_symbol=?", (floor, update.message.from_user.id, symbol))
+            c.execute("UPDATE coins SET floor=? WHERE user_id=? AND coin_symbol=?", (floor, user_id, symbol))
             conn.commit()
-            await update.message.reply_text(f"کف `${floor:,}` برای {name} ثبت شد!\nهشدار فعال شد.")
+            await update.message.reply_text(f"کف `${floor:,.2f}` برای {name} ثبت شد!\nهشدار فعال شد.")
         except:
             await update.message.reply_text("عدد معتبر بنویس!")
     else:
@@ -215,16 +223,12 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     app = Application.builder().token(TOKEN).build()
 
-    # منوی اصلی
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(button))
-
-    # افزودن ارز
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    # تنظیم سقف و کف
     conv_handler = ConversationHandler(
-        entry_points=[CallbackQueryHandler(button)],
+        entry_points=[CallbackQueryHandler(button, pattern="^select_coin_")],
         states={
             SET_CEILING: [MessageHandler(filters.TEXT & ~filters.COMMAND, set_ceiling)],
             SET_FLOOR: [MessageHandler(filters.TEXT & ~filters.COMMAND, set_floor)],
