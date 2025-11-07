@@ -10,7 +10,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage  # برای FSM
 
 # --- تنظیمات ---
-TOKEN = os.getenv("7836143571:AAHkxNnb8e78LD01sP5BlohC9WQxT2DgcLs")
+TOKEN = os.getenv("7836143571:AAG38dWzfXGwYDFqjocIRWfUI0x5LAvC-sk")
 if TOKEN is None:
     raise ValueError("BOT_TOKEN is not set in environment variables.")
 
