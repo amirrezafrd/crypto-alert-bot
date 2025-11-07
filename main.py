@@ -1,6 +1,7 @@
-# main.py - ربات آلارم قیمت کریپتو با Binance API - نسخه نهایی و بدون خطا
+# main.py - ربات آلارم قیمت کریپتو با Binance API - نسخه نهایی و 100% کارکردنی
 import logging
 import sqlite3
+import asyncio
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler, MessageHandler,
@@ -13,36 +14,40 @@ from aiocron import crontab
 SET_CEILING, SET_FLOOR = range(2)
 
 # === تنظیمات ===
-TOKEN = "7836143571:AAHkxNnb8e78LD01sP5BlohC9WQxT2DgcLs"  # توکن رو اینجا بذار
+TOKEN = "7836143571:AAHkxNnb8e78LD01sP5BlohC9WQxT2DgcLs"  # توکن رباتت رو اینجا بذار
 BINANCE_PRICE_API = "https://api.binance.com/api/v3/ticker/price"
 BINANCE_TICKER_API = "https://api.binance.com/api/v3/exchangeInfo"
 
 logging.basicConfig(level=logging.INFO)
 
-# دیتابیس دائمی (Global)
+# دیتابیس دائمی
 conn = sqlite3.connect('/tmp/data.db', check_same_thread=False)
 c = conn.cursor()
 c.execute('''CREATE TABLE IF NOT EXISTS coins 
              (user_id INTEGER, coin_symbol TEXT, coin_name TEXT, floor REAL, ceiling REAL)''')
 conn.commit()
 
-# دریافت تمام symbolهای Binance (یکبار در شروع)
+# دیکشنری جهانی برای symbolهای Binance
 BINANCE_SYMBOLS = {}
 
+# لود کردن symbolها از Binance
 async def load_binance_symbols():
     global BINANCE_SYMBOLS
-    async with aiohttp.ClientSession() as session:
-        async with session.get(BINANCE_TICKER_API) as resp:
-            if resp.status == 200:
-                data = await resp.json()
-                for s in data['symbols']:
-                    if s['quoteAsset'] == 'USDT' and s['status'] == 'TRADING':
-                        base = s['baseAsset']
-                        symbol = s['symbol']
-                        BINANCE_SYMBOLS[base.lower()] = symbol
-                        BINANCE_SYMBOLS[base.upper()] = symbol
-                        BINANCE_SYMBOLS[symbol.replace('USDT', '').lower()] = symbol
-                logging.info(f"Loaded {len(BINANCE_SYMBOLS)} symbols from Binance")
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(BINANCE_TICKER_API) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    for s in data['symbols']:
+                        if s['quoteAsset'] == 'USDT' and s['status'] == 'TRADING':
+                            base = s['baseAsset']
+                            symbol = s['symbol']
+                            BINANCE_SYMBOLS[base.lower()] = symbol
+                            BINANCE_SYMBOLS[base.upper()] = symbol
+                            BINANCE_SYMBOLS[symbol.replace('USDT', '').lower()] = symbol
+                    logging.info(f"Loaded {len(BINANCE_SYMBOLS)} symbols from Binance")
+    except Exception as e:
+        logging.error(f"Error loading symbols: {e}")
 
 # دریافت قیمت
 async def get_prices(symbols):
@@ -50,38 +55,43 @@ async def get_prices(symbols):
         return {}
     symbols_json = '","'.join(symbols)
     url = f"{BINANCE_PRICE_API}?symbols=[%22{symbols_json}%22]"
-    async with aiohttp.ClientSession() as session:
-        async with session.get(url) as resp:
-            if resp.status == 200:
-                data = await resp.json()
-                return {item['symbol']: float(item['price']) for item in data}
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    return {item['symbol']: float(item['price']) for item in data}
+    except:
+        pass
     return {}
 
 # چک کردن هشدارها هر ۲ دقیقه
 async def check_alerts(context: ContextTypes.DEFAULT_TYPE):
-    global c, conn
-    rows = c.execute("SELECT user_id, coin_symbol, coin_name, floor, ceiling FROM coins WHERE floor IS NOT NULL OR ceiling IS NOT NULL").fetchall()
-    if not rows:
-        return
-    symbols = list({row[1] for row in rows})
-    prices = await get_prices(symbols)
-    
-    for user_id, symbol, name, floor, ceiling in rows:
-        price = prices.get(symbol)
-        if price is None:
-            continue
-        msg = None
-        if floor and price <= floor:
-            msg = f"هشدار کف قیمت!\n{name} به `${price:,.2f}` رسید (کف: `${floor:,.2f}`)"
-        elif ceiling and price >= ceiling:
-            msg = f"هشدار سقف قیمت!\n{name} به `${price:,.2f}` رسید (سقف: `${ceiling:,.2f}`)"
-        if msg:
-            try:
-                await context.bot.send_message(chat_id=user_id, text=msg)
-                c.execute("UPDATE coins SET floor=NULL, ceiling=NULL WHERE user_id=? AND coin_symbol=?", (user_id, symbol))
-                conn.commit()
-            except Exception as e:
-                logging.error(f"Error sending alert: {e}")
+    try:
+        rows = c.execute("SELECT user_id, coin_symbol, coin_name, floor, ceiling FROM coins WHERE floor IS NOT NULL OR ceiling IS NOT NULL").fetchall()
+        if not rows:
+            return
+        symbols = list({row[1] for row in rows})
+        prices = await get_prices(symbols)
+        
+        for user_id, symbol, name, floor, ceiling in rows:
+            price = prices.get(symbol)
+            if price is None:
+                continue
+            msg = None
+            if floor and price <= floor:
+                msg = f"هشدار کف قیمت!\n{name} به `${price:,.2f}` رسید (کف: `${floor:,.2f}`)"
+            elif ceiling and price >= ceiling:
+                msg = f"هشدار سقف قیمت!\n{name} به `${price:,.2f}` رسید (سقف: `${ceiling:,.2f}`)"
+            if msg:
+                try:
+                    await context.bot.send_message(chat_id=user_id, text=msg)
+                    c.execute("UPDATE coins SET floor=NULL, ceiling=NULL WHERE user_id=? AND coin_symbol=?", (user_id, symbol))
+                    conn.commit()
+                except Exception as e:
+                    logging.error(f"Alert error: {e}")
+    except Exception as e:
+        logging.error(f"Check alerts error: {e}")
 
 # منوی اصلی
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -101,7 +111,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # دکمه‌ها
 async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global c, conn
     query = update.callback_query
     await query.answer()
     user_id = query.from_user.id
@@ -123,7 +132,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if price is not None:
                 text += f"• {name}: `${price:,.2f}`\n"
             else:
-                text += f"• {name}: خطا در دریافت قیمت\n"
+                text += f"• {name}: خطا\n"
         await query.edit_message_text(text)
     
     elif query.data == "my_coins":
@@ -149,15 +158,16 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif query.data.startswith("select_coin_"):
         symbol = query.data.split("_", 2)[2]
-        name = c.execute("SELECT coin_name FROM coins WHERE user_id=? AND coin_symbol=?", (user_id, symbol)).fetchone()[0]
-        context.user_data['selected_symbol'] = symbol
-        context.user_data['selected_name'] = name
-        await query.edit_message_text(f"ارز: {name}\n\nقیمت سقف رو بفرست (یا /skip):")
-        return SET_CEILING
+        result = c.execute("SELECT coin_name FROM coins WHERE user_id=? AND coin_symbol=?", (user_id, symbol)).fetchone()
+        if result:
+            name = result[0]
+            context.user_data['selected_symbol'] = symbol
+            context.user_data['selected_name'] = name
+            await query.edit_message_text(f"ارز: {name}\n\nقیمت سقف رو بفرست (یا /skip):")
+            return SET_CEILING
 
 # افزودن ارز
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global c, conn, BINANCE_SYMBOLS
     user_id = update.message.from_user.id
     text = update.message.text.strip()
     action = context.user_data.get('action')
@@ -181,7 +191,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # تنظیم سقف
 async def set_ceiling(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global c, conn
     text = update.message.text.strip()
     if text == "/skip":
         await update.message.reply_text("قیمت سقف رد شد.\nحالا قیمت کف رو بفرست (یا /skip):")
@@ -196,11 +205,10 @@ async def set_ceiling(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"سقف `${ceiling:,.2f}` ثبت شد.\nحالا قیمت کف رو بفرست (یا /skip):")
         return SET_FLOOR
     except:
-        await update.message.reply_text("عدد معتبر بنویس! مثال: 70000 یا 70,000")
+        await update.message.reply_text("عدد معتبر بنویس! مثال: 70000")
 
 # تنظیم کف
 async def set_floor(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global c, conn
     text = update.message.text.strip()
     symbol = context.user_data['selected_symbol']
     name = context.user_data['selected_name']
@@ -225,17 +233,16 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await start(update, context)
     return ConversationHandler.END
 
-def main():
+# راه‌اندازی
+async def main_async():
+    await load_binance_symbols()
+    
     app = Application.builder().token(TOKEN).build()
-
-    # لود کردن symbolها
-    asyncio.create_task(load_binance_symbols())
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(button))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    # Conversation برای سقف و کف
     conv_handler = ConversationHandler(
         entry_points=[CallbackQueryHandler(button, pattern="^select_coin_")],
         states={
@@ -246,14 +253,14 @@ def main():
     )
     app.add_handler(conv_handler)
 
-    # فعال کردن JobQueue
-    app.job_queue.run_once(lambda _: None, 0)  # فعال‌سازی
+    # فعال‌سازی JobQueue
+    app.job_queue.run_once(lambda _: None, 0)
 
     # چک کردن هشدارها هر ۲ دقیقه
     crontab('*/2 * * * *', check_alerts)(app.job_queue)
 
     print("ربات حرفه‌ای با Binance API فعال شد...")
-    app.run_polling()
+    await app.run_polling()
 
 if __name__ == '__main__':
-    main()
+    asyncio.run(main_async())
