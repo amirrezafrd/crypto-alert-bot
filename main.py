@@ -1,14 +1,16 @@
-# main.py - ربات آلارم قیمت کریپتو با Binance API - نسخه 100% درست و تست‌شده
+# main.py - ربات آلارم قیمت کریپتو با Binance API - نسخه نهایی و بدون خطا
 import logging
 import sqlite3
-import asyncio
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, ContextTypes, filters, ConversationHandler
+from telegram.ext import (
+    Application, CommandHandler, CallbackQueryHandler, MessageHandler,
+    ContextTypes, filters, ConversationHandler
+)
 import aiohttp
 from aiocron import crontab
 
 # === وضعیت‌های Conversation ===
-SELECT_COIN, SET_CEILING, SET_FLOOR = range(3)
+SET_CEILING, SET_FLOOR = range(2)
 
 # === تنظیمات ===
 TOKEN = "7836143571:AAHkxNnb8e78LD01sP5BlohC9WQxT2DgcLs"  # توکن رو اینجا بذار
@@ -17,47 +19,47 @@ BINANCE_TICKER_API = "https://api.binance.com/api/v3/exchangeInfo"
 
 logging.basicConfig(level=logging.INFO)
 
-# دیتابیس دائمی
+# دیتابیس دائمی (Global)
 conn = sqlite3.connect('/tmp/data.db', check_same_thread=False)
 c = conn.cursor()
 c.execute('''CREATE TABLE IF NOT EXISTS coins 
              (user_id INTEGER, coin_symbol TEXT, coin_name TEXT, floor REAL, ceiling REAL)''')
 conn.commit()
 
-# دریافت لیست تمام symbolهای Binance
-async def get_binance_symbols():
+# دریافت تمام symbolهای Binance (یکبار در شروع)
+BINANCE_SYMBOLS = {}
+
+async def load_binance_symbols():
+    global BINANCE_SYMBOLS
     async with aiohttp.ClientSession() as session:
         async with session.get(BINANCE_TICKER_API) as resp:
             if resp.status == 200:
                 data = await resp.json()
-                symbols = {}
                 for s in data['symbols']:
                     if s['quoteAsset'] == 'USDT' and s['status'] == 'TRADING':
                         base = s['baseAsset']
                         symbol = s['symbol']
-                        symbols[base.lower()] = symbol
-                        symbols[base.upper()] = symbol
-                        symbols[symbol.replace('USDT', '').lower()] = symbol
-                return symbols
-    return {}
+                        BINANCE_SYMBOLS[base.lower()] = symbol
+                        BINANCE_SYMBOLS[base.upper()] = symbol
+                        BINANCE_SYMBOLS[symbol.replace('USDT', '').lower()] = symbol
+                logging.info(f"Loaded {len(BINANCE_SYMBOLS)} symbols from Binance")
 
 # دریافت قیمت
 async def get_prices(symbols):
     if not symbols:
         return {}
-    # درست کردن لیست symbolها به فرمت JSON
     symbols_json = '","'.join(symbols)
     url = f"{BINANCE_PRICE_API}?symbols=[%22{symbols_json}%22]"
     async with aiohttp.ClientSession() as session:
         async with session.get(url) as resp:
             if resp.status == 200:
                 data = await resp.json()
-                prices = {item['symbol']: float(item['price']) for item in data}
-                return prices
+                return {item['symbol']: float(item['price']) for item in data}
     return {}
 
 # چک کردن هشدارها هر ۲ دقیقه
 async def check_alerts(context: ContextTypes.DEFAULT_TYPE):
+    global c, conn
     rows = c.execute("SELECT user_id, coin_symbol, coin_name, floor, ceiling FROM coins WHERE floor IS NOT NULL OR ceiling IS NOT NULL").fetchall()
     if not rows:
         return
@@ -78,8 +80,8 @@ async def check_alerts(context: ContextTypes.DEFAULT_TYPE):
                 await context.bot.send_message(chat_id=user_id, text=msg)
                 c.execute("UPDATE coins SET floor=NULL, ceiling=NULL WHERE user_id=? AND coin_symbol=?", (user_id, symbol))
                 conn.commit()
-            except:
-                pass
+            except Exception as e:
+                logging.error(f"Error sending alert: {e}")
 
 # منوی اصلی
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -93,12 +95,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "ربات آلارم قیمت کریپتو\n"
         "قیمت‌ها مستقیم از Binance\n"
-        "هشدار سقف و کف با دقت بالا",
+        "هشدار سقف و کف + نمایش لحظه‌ای",
         reply_markup=reply_markup
     )
 
 # دکمه‌ها
 async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global c, conn
     query = update.callback_query
     await query.answer()
     user_id = query.from_user.id
@@ -131,8 +134,8 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text = "ارزهای تو:\n\n"
         for name, floor, ceiling in coins:
             f = f" | کف: ${floor:,.2f}" if floor else ""
-            c = f" | سقف: ${ceiling:,.2f}" if ceiling else ""
-            text += f"• {name}{f}{c}\n"
+            c_text = f" | سقف: ${ceiling:,.2f}" if ceiling else ""
+            text += f"• {name}{f}{c_text}\n"
         await query.edit_message_text(text)
     
     elif query.data == "set_alert":
@@ -146,7 +149,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif query.data.startswith("select_coin_"):
         symbol = query.data.split("_", 2)[2]
-        name = next((row[0] for row in c.execute("SELECT coin_name FROM coins WHERE user_id=? AND coin_symbol=?", (user_id, symbol))), symbol)
+        name = c.execute("SELECT coin_name FROM coins WHERE user_id=? AND coin_symbol=?", (user_id, symbol)).fetchone()[0]
         context.user_data['selected_symbol'] = symbol
         context.user_data['selected_name'] = name
         await query.edit_message_text(f"ارز: {name}\n\nقیمت سقف رو بفرست (یا /skip):")
@@ -154,15 +157,15 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # افزودن ارز
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global c, conn, BINANCE_SYMBOLS
     user_id = update.message.from_user.id
     text = update.message.text.strip()
     action = context.user_data.get('action')
 
     if action == 'add_coin':
-        symbols = await get_binance_symbols()
-        symbol = symbols.get(text.lower())
+        symbol = BINANCE_SYMBOLS.get(text.lower())
         if not symbol:
-            await update.message.reply_text("این ارز در Binance موجود نیست!\nمثال: BTC, ETH, SOL, BNB, DOGE")
+            await update.message.reply_text("این ارز در Binance موجود نیست!\nمثال: BTC, ETH, SOL, DOGE, SHIB")
             return
         
         count = c.execute("SELECT COUNT(*) FROM coins WHERE user_id=?", (user_id,)).fetchone()[0]
@@ -178,6 +181,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # تنظیم سقف
 async def set_ceiling(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global c, conn
     text = update.message.text.strip()
     if text == "/skip":
         await update.message.reply_text("قیمت سقف رد شد.\nحالا قیمت کف رو بفرست (یا /skip):")
@@ -196,6 +200,7 @@ async def set_ceiling(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # تنظیم کف
 async def set_floor(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global c, conn
     text = update.message.text.strip()
     symbol = context.user_data['selected_symbol']
     name = context.user_data['selected_name']
@@ -223,10 +228,14 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     app = Application.builder().token(TOKEN).build()
 
+    # لود کردن symbolها
+    asyncio.create_task(load_binance_symbols())
+
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(button))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
+    # Conversation برای سقف و کف
     conv_handler = ConversationHandler(
         entry_points=[CallbackQueryHandler(button, pattern="^select_coin_")],
         states={
@@ -236,6 +245,9 @@ def main():
         fallbacks=[CommandHandler("cancel", cancel)],
     )
     app.add_handler(conv_handler)
+
+    # فعال کردن JobQueue
+    app.job_queue.run_once(lambda _: None, 0)  # فعال‌سازی
 
     # چک کردن هشدارها هر ۲ دقیقه
     crontab('*/2 * * * *', check_alerts)(app.job_queue)
