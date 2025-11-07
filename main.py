@@ -10,7 +10,7 @@ from aiogram.filters import Command
 TOKEN = os.getenv("BOT_TOKEN")
 DATA_FILE = "users.json"
 
-bot = Bot(token="BOT_TOKEN")
+bot = Bot(token=TOKEN)
 dp = Dispatcher()
 router = Router()
 dp.include_router(router)
