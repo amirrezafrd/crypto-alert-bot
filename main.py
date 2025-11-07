@@ -206,7 +206,7 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
        # هر ۳۰ دقیقه لیست قیمت
-    crontab('*/30 * * * *', send_price_list)(app.job_queue)
+    crontab('*/1 * * * *', send_price_list)(app.job_queue)
     # هر ۵ دقیقه چک کردن آلارم
     crontab('*/5 * * * *', check_alerts)(app.job_queue)
 
