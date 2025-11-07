@@ -8,7 +8,7 @@ import aiohttp
 from aiocron import crontab
 
 # === تنظیمات ===
-TOKEN = "HERE_YOUR_TOKEN"  # توکن رباتت رو اینجا بذار
+TOKEN = "7836143571:AAHkxNnb8e78LD01sP5BlohC9WQxT2DgcLs"  # توکن رباتت رو اینجا بذار
 BINANCE_API = "https://api.binance.com/api/v3/ticker/price"
 
 logging.basicConfig(level=logging.INFO)
