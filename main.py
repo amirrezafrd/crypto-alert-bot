@@ -11,7 +11,7 @@ from aiocron import crontab
 SELECT_COIN, SET_CEILING, SET_FLOOR = range(3)
 
 # === تنظیمات ===
-TOKEN = "HERE_YOUR_TOKEN"  # توکن رو اینجا بذار
+TOKEN = "7836143571:AAHkxNnb8e78LD01sP5BlohC9WQxT2DgcLs"  # توکن رو اینجا بذار
 BINANCE_PRICE_API = "https://api.binance.com/api/v3/ticker/price"
 BINANCE_TICKER_API = "https://api.binance.com/api/v3/exchangeInfo"
 
