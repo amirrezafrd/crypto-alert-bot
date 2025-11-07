@@ -1,4 +1,4 @@
-# main.py - ربات آلارم قیمت کریپتو - نسخه کامل و ساده
+# main.py - ربات آلارم قیمت کریپتو با Binance API - نسخه نهایی و تست‌شده
 import logging
 import sqlite3
 import asyncio
@@ -8,73 +8,79 @@ import aiohttp
 from aiocron import crontab
 
 # === تنظیمات ===
-TOKEN = "7836143571:AAHkxNnb8e78LD01sP5BlohC9WQxT2DgcLs"  # <--- توکن رو اینجا بذار
-COINGECKO_API = "https://api.coingecko.com/api/v3/simple/price"
+TOKEN = "HERE_YOUR_TOKEN"  # توکن رباتت رو اینجا بذار
+BINANCE_API = "https://api.binance.com/api/v3/ticker/price"
 
 logging.basicConfig(level=logging.INFO)
 
-# دیتابیس
-conn = sqlite3.connect('data.db', check_same_thread=False)
+# دیتابیس دائمی
+conn = sqlite3.connect('/tmp/data.db', check_same_thread=False)
 c = conn.cursor()
 c.execute('''CREATE TABLE IF NOT EXISTS coins 
-             (user_id INTEGER, coin_id TEXT, coin_name TEXT, floor REAL, ceiling REAL)''')
+             (user_id INTEGER, coin_symbol TEXT, coin_name TEXT, floor REAL, ceiling REAL)''')
 conn.commit()
 
-# دریافت قیمت
-async def get_prices(coin_ids):
-    if not coin_ids:
+# دریافت قیمت از Binance
+async def get_prices(coin_symbols):
+    if not coin_symbols:
         return {}
-    ids = ",".join(coin_ids)
-    params = {"ids": ids, "vs_currencies": "usd"}
+    symbols = '","'.join(coin_symbols)
+    url = f"https://api.binance.com/api/v3/ticker/price?symbols=[\"{symbols}\"]"
     async with aiohttp.ClientSession() as session:
-        async with session.get(COINGECKO_API, params=params) as resp:
+        async with session.get(url) as resp:
             if resp.status == 200:
-                return await resp.json()
+                data = await resp.json()
+                prices = {}
+                for item in data:
+                    symbol = item['symbol']
+                    price = float(item['price'])
+                    prices[symbol] = {"usd": price}
+                return prices
     return {}
 
-# ارسال لیست هر ۳۰ دقیقه
+# ارسال لیست هر ۱ دقیقه (برای تست)
 async def send_price_list(context: ContextTypes.DEFAULT_TYPE):
     users = c.execute("SELECT DISTINCT user_id FROM coins").fetchall()
     for (user_id,) in users:
-        coins = c.execute("SELECT coin_id, coin_name FROM coins WHERE user_id=?", (user_id,)).fetchall()
+        coins = c.execute("SELECT coin_symbol, coin_name FROM coins WHERE user_id=?", (user_id,)).fetchall()
         if not coins:
             continue
-        coin_ids = [row[0] for row in coins]
-        prices = await get_prices(coin_ids)
+        symbols = [row[0] for row in coins]
+        prices = await get_prices(symbols)
         
-        text = "قیمت لحظه‌ای ارزهای شما (هر ۳۰ دقیقه):\n\n"
-        for coin_id, coin_name in coins:
-            price = prices.get(coin_id, {}).get("usd", "خطا")
-            text += f"• {coin_name}: `${price}`\n"
+        text = "قیمت لحظه‌ای ارزها (از Binance - هر ۱ دقیقه):\n\n"
+        for symbol, name in coins:
+            price = prices.get(symbol, {}).get("usd", "خطا")
+            text += f"• {name}: `${price}`\n"
         
         try:
             await context.bot.send_message(chat_id=user_id, text=text)
         except:
             pass
 
-# چک کردن آلارم
+# چک کردن آلارم هر ۵ دقیقه
 async def check_alerts(context: ContextTypes.DEFAULT_TYPE):
-    rows = c.execute("SELECT user_id, coin_id, coin_name, floor, ceiling FROM coins WHERE floor IS NOT NULL OR ceiling IS NOT NULL").fetchall()
+    rows = c.execute("SELECT user_id, coin_symbol, coin_name, floor, ceiling FROM coins WHERE floor IS NOT NULL OR ceiling IS NOT NULL").fetchall()
     if not rows:
         return
-    coin_ids = list({row[1] for row in rows})
-    prices = await get_prices(coin_ids)
+    symbols = list({row[1] for row in rows})
+    prices = await get_prices(symbols)
     
-    for user_id, coin_id, coin_name, floor, ceiling in rows:
-        price = prices.get(coin_id, {}).get("usd")
+    for user_id, symbol, name, floor, ceiling in rows:
+        price = prices.get(symbol, {}).get("usd")
         if price is None:
             continue
             
         msg = None
         if floor and price <= floor:
-            msg = f"هشدار کف قیمت!\n{coin_name} به `${price}` رسید (کف: `${floor}`)"
+            msg = f"هشدار کف قیمت!\n{name} به `${price}` رسید (کف: `${floor}`)"
         elif ceiling and price >= ceiling:
-            msg = f"هشدار سقف قیمت!\n{coin_name} به `${price}` رسید (سقف: `${ceiling}`)"
+            msg = f"هشدار سقف قیمت!\n{name} به `${price}` رسید (سقف: `${ceiling}`)"
             
         if msg:
             try:
                 await context.bot.send_message(chat_id=user_id, text=msg)
-                c.execute("UPDATE coins SET floor=NULL, ceiling=NULL WHERE user_id=? AND coin_id=?", (user_id, coin_id))
+                c.execute("UPDATE coins SET floor=NULL, ceiling=NULL WHERE user_id=? AND coin_symbol=?", (user_id, symbol))
                 conn.commit()
             except:
                 pass
@@ -89,10 +95,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text(
-        "ربات آلارم قیمت کریپتو\n\n"
-        "حداکثر ۲۰ ارز می‌تونی اضافه کنی\n"
-        "هر ۳۰ دقیقه قیمت همه رو می‌فرستم\n"
-        "می‌تونی کف و سقف قیمت بذاری تا هشدار بدم",
+        "ربات آلارم قیمت کریپتو\n"
+        "قیمت‌ها از Binance (دقیق و لحظه‌ای)\n"
+        "هر ۱ دقیقه لیست قیمت میاد\n"
+        "حداکثر ۲۰ ارز",
         reply_markup=reply_markup
     )
 
@@ -103,7 +109,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = query.from_user.id
 
     if query.data == "add":
-        await query.edit_message_text("اسم ارز رو بفرست (مثلاً: bitcoin یا ethereum)\nلیست: bitcoin, ethereum, solana, cardano, ripple, dogecoin, ...")
+        await query.edit_message_text("اسم ارز رو بفرست (مثل: btc, eth, sol, bnb, ada, xrp, doge, ton, avax, shib)")
         context.user_data['action'] = 'add_coin'
     
     elif query.data == "list":
@@ -125,62 +131,65 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif query.data == "help":
         await query.edit_message_text(
             "راهنما:\n\n"
-            "• /start - منوی اصلی\n"
-            "• افزودن ارز → اسم انگلیسی ارز (مثل bitcoin)\n"
-            "• بعد از اضافه کردن، می‌تونی بگی:\n"
-            "   کف ۲۰۰۰\n"
-            "   سقف ۳۰۰۰\n"
-            "• هر ۳۰ دقیقه لیست قیمت میاد\n"
-            "• وقتی قیمت به کف/سقف برسه، هشدار میدم"
+            "/start - منو\n"
+            "افزودن ارز → اسم کوتاه (btc, eth, sol, ...)\n"
+            "بعد از اضافه کردن:\n"
+            "   کف ۶۰۰۰۰\n"
+            "   سقف ۷۰۰۰۰\n"
+            "هر ۱ دقیقه لیست قیمت از Binance میاد\n"
+            "هشدار وقتی قیمت به کف/سقف برسه"
         )
 
-# دریافت پیام متنی
+# مدیریت پیام
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     text = update.message.text.lower().strip()
     action = context.user_data.get('action')
 
+    # لیست ارزهای پشتیبانی‌شده در Binance
+    binance_symbols = {
+        "bitcoin": "BTCUSDT", "btc": "BTCUSDT",
+        "ethereum": "ETHUSDT", "eth": "ETHUSDT",
+        "solana": "SOLUSDT", "sol": "SOLUSDT",
+        "binancecoin": "BNBUSDT", "bnb": "BNBUSDT",
+        "cardano": "ADAUSDT", "ada": "ADAUSDT",
+        "ripple": "XRPUSDT", "xrp": "XRPUSDT",
+        "dogecoin": "DOGEUSDT", "doge": "DOGEUSDT",
+        "ton": "TONUSDT", "toncoin": "TONUSDT",
+        "avalanche": "AVAXUSDT", "avax": "AVAXUSDT",
+        "shiba": "SHIBUSDT", "shib": "SHIBUSDT",
+        "pepe": "PEPEUSDT",
+        "link": "LINKUSDT",
+        "matic": "MATICUSDT", "pol": "MATICUSDT",
+    }
+
     if action == 'add_coin':
-        # لیست ارزهای پشتیبانی شده (کوین‌گکو)
-        simple_names = {
-            "bitcoin": "bitcoin", "btc": "bitcoin",
-            "ethereum": "ethereum", "eth": "ethereum",
-            "solana": "solana", "sol": "solana",
-            "cardano": "cardano", "ada": "cardano",
-            "ripple": "ripple", "xrp": "ripple",
-            "dogecoin": "dogecoin", "doge": "dogecoin",
-            "bnb": "binancecoin",
-            "ton": "the-open-network", "toncoin": "the-open-network",
-            "tron": "tron", "trx": "tron",
-            "avax": "avalanche-2",
-            "shiba": "shiba-inu", "shib": "shiba-inu",
-            "pepe": "pepe",
-            "link": "chainlink",
-            "matic": "polygon", "pol": "polygon",
-        }
-        
-        coin_id = simple_names.get(text)
-        if not coin_id:
-            await update.message.reply_text("ارز پیدا نشد! فقط ارزهای معروف پشتیبانی می‌شه.")
+        symbol = binance_symbols.get(text)
+        if not symbol:
+            await update.message.reply_text("این ارز در Binance نیست یا اشتباه نوشتی!\nمثال: btc, eth, sol, bnb")
             return
         
-        # چک کردن تعداد
         count = c.execute("SELECT COUNT(*) FROM coins WHERE user_id=?", (user_id,)).fetchone()[0]
         if count >= 20:
-            await update.message.reply_text("حداکثر ۲۰ ارز می‌تونی داشته باشی!")
+            await update.message.reply_text("حداکثر ۲۰ ارز!")
             return
         
-        c.execute("INSERT OR IGNORE INTO coins (user_id, coin_id, coin_name) VALUES (?, ?, ?)",
-                  (user_id, coin_id, text.capitalize()))
+        name = text.upper()
+        c.execute("INSERT OR IGNORE INTO coins (user_id, coin_symbol, coin_name) VALUES (?, ?, ?)",
+                  (user_id, symbol, name))
         conn.commit()
-        await update.message.reply_text(f"{text.capitalize()} اضافه شد!\nحالا می‌تونی بگی:\nکف ۲۰۰۰\nسقف ۳۰۰۰")
+        await update.message.reply_text(f"{name} اضافه شد!\nحالا می‌تونی بنویسی:\nکف ۶۰۰۰۰\nسقف ۷۰۰۰۰")
         context.user_data['action'] = None
-        context.user_data['waiting_for'] = text.capitalize()
+        context.user_data['waiting_for'] = name
 
     elif action == 'delete_coin':
-        c.execute("DELETE FROM coins WHERE user_id=? AND coin_name=?", (user_id, text.capitalize()))
+        symbol = binance_symbols.get(text)
+        if not symbol:
+            await update.message.reply_text("ارز پیدا نشد!")
+            return
+        c.execute("DELETE FROM coins WHERE user_id=? AND coin_symbol=?", (user_id, symbol))
         conn.commit()
-        await update.message.reply_text(f"{text.capitalize()} حذف شد!" if c.rowcount else "ارز پیدا نشد!")
+        await update.message.reply_text(f"{text.upper()} حذف شد!" if c.rowcount else "ارز پیدا نشد!")
         context.user_data['action'] = None
 
     elif text.startswith("کف ") or text.startswith("سقف "):
@@ -188,6 +197,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             price = float(text.split()[1])
             last_coin = context.user_data.get('waiting_for')
             if last_coin:
+                symbol = binance_symbols.get(last_coin.lower())
                 if text.startswith("کف "):
                     c.execute("UPDATE coins SET floor=? WHERE user_id=? AND coin_name=?", (price, user_id, last_coin))
                 else:
@@ -195,7 +205,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 conn.commit()
                 await update.message.reply_text(f"{text} برای {last_coin} ثبت شد!")
         except:
-            await update.message.reply_text("فقط عدد بنویس! مثلاً: کف ۲۰۰۰")
+            await update.message.reply_text("فقط عدد! مثال: کف ۶۰۰۰۰")
 
 # راه‌اندازی
 def main():
@@ -205,12 +215,12 @@ def main():
     app.add_handler(CallbackQueryHandler(button))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-       # هر ۳۰ دقیقه لیست قیمت
+    # هر ۱ دقیقه لیست قیمت (برای تست)
     crontab('*/1 * * * *', send_price_list)(app.job_queue)
-    # هر ۵ دقیقه چک کردن آلارم
+    # هر ۵ دقیقه چک آلارم
     crontab('*/5 * * * *', check_alerts)(app.job_queue)
 
-    print("ربات در حال اجراست...")
+    print("ربات با Binance API در حال اجراست...")
     app.run_polling()
 
 if __name__ == '__main__':
