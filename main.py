@@ -205,10 +205,10 @@ def main():
     app.add_handler(CallbackQueryHandler(button))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    # هر ۳۰ دقیقه لیست قیمت
-    crontab('*/30 * * * *', send_price_list, start_now=False)(app.job_queue)
-    # هر ۵ دقیقه چک آلارم
-    crontab('*/5 * * * *', check_alerts, start_now=True)(app.job_queue)
+       # هر ۳۰ دقیقه لیست قیمت
+    crontab('*/30 * * * *', send_price_list)(app.job_queue)
+    # هر ۵ دقیقه چک کردن آلارم
+    crontab('*/5 * * * *', check_alerts)(app.job_queue)
 
     print("ربات در حال اجراست...")
     app.run_polling()
