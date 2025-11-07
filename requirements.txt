@@ -1,3 +1,2 @@
-aiogram==3.2.0
-pydantic==2.5.3
-requests==2.31.0
+aiogram==3.13.1
+aiohttp==3.9.5
