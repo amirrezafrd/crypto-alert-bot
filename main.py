@@ -1,4 +1,4 @@
-# main.py - ربات آلارم قیمت کریپتو با Binance API - نسخه نهایی، سازگار با Python 3.13 و بدون خطا
+# main.py - ربات آلارم قیمت کریپتو با Binance API - نسخه نهایی، سازگار با Python 3.13 با v21
 import logging
 import sqlite3
 import asyncio
@@ -102,12 +102,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("لیست ارزهای من", callback_data="my_coins")],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text(
-        "ربات آلارم قیمت کریپتو\n"
-        "قیمت‌ها مستقیم از Binance\n"
-        "هشدار سقف و کف + نمایش لحظه‌ای",
-        reply_markup=reply_markup
-    )
+    await context.bot.send_message(chat_id=update.effective_chat.id, text="ربات آلارم قیمت کریپتو\nقیمت‌ها مستقیم از Binance\nهشدار سقف و کف + نمایش لحظه‌ای", reply_markup=reply_markup)
 
 # دکمه‌ها
 async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -116,7 +111,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = query.from_user.id
 
     if query.data == "add_coin":
-        await query.edit_message_text("اسم ارز رو بفرست (مثل BTC یا Bitcoin)")
+        await query.edit_message_text(text="اسم ارز رو بفرست (مثل BTC یا Bitcoin)")
         context.user_data['action'] = 'add_coin'
     
     elif query.data == "show_prices":
@@ -133,7 +128,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 text += f"• {name}: `${price:,.2f}`\n"
             else:
                 text += f"• {name}: خطا\n"
-        await query.edit_message_text(text)
+        await query.edit_message_text(text=text)
     
     elif query.data == "my_coins":
         coins = c.execute("SELECT coin_name, floor, ceiling FROM coins WHERE user_id=?", (user_id,)).fetchall()
@@ -145,7 +140,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f = f" | کف: ${floor:,.2f}" if floor else ""
             c_text = f" | سقف: ${ceiling:,.2f}" if ceiling else ""
             text += f"• {name}{f}{c_text}\n"
-        await query.edit_message_text(text)
+        await query.edit_message_text(text=text)
     
     elif query.data == "set_alert":
         coins = c.execute("SELECT coin_name, coin_symbol FROM coins WHERE user_id=?", (user_id,)).fetchall()
@@ -154,7 +149,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         keyboard = [[InlineKeyboardButton(name, callback_data=f"select_coin_{symbol}")] for name, symbol in coins]
         reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text("ارز مورد نظر رو انتخاب کن:", reply_markup=reply_markup)
+        await query.edit_message_text(text="ارز مورد نظر رو انتخاب کن:", reply_markup=reply_markup)
 
     elif query.data.startswith("select_coin_"):
         symbol = query.data.split("_", 2)[2]
@@ -163,7 +158,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             name = result[0]
             context.user_data['selected_symbol'] = symbol
             context.user_data['selected_name'] = name
-            await query.edit_message_text(f"ارز: {name}\n\nقیمت سقف رو بفرست (یا /skip):")
+            await query.edit_message_text(text=f"ارز: {name}\n\nقیمت سقف رو بفرست (یا /skip):")
             return SET_CEILING
 
 # افزودن ارز
@@ -175,61 +170,61 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if action == 'add_coin':
         symbol = BINANCE_SYMBOLS.get(text.lower())
         if not symbol:
-            await update.message.reply_text("این ارز در Binance موجود نیست!\nمثال: BTC, ETH, SOL, DOGE, SHIB")
+            await context.bot.send_message(chat_id=user_id, text="این ارز در Binance موجود نیست!\nمثال: BTC, ETH, SOL, DOGE, SHIB")
             return
         
         count = c.execute("SELECT COUNT(*) FROM coins WHERE user_id=?", (user_id,)).fetchone()[0]
         if count >= 20:
-            await update.message.reply_text("حداکثر ۲۰ ارز!")
+            await context.bot.send_message(chat_id=user_id, text="حداکثر ۲۰ ارز!")
             return
         
         name = text.upper()
         c.execute("INSERT OR IGNORE INTO coins (user_id, coin_symbol, coin_name) VALUES (?, ?, ?)", (user_id, symbol, name))
         conn.commit()
-        await update.message.reply_text(f"{name} با موفقیت اضافه شد!")
+        await context.bot.send_message(chat_id=user_id, text=f"{name} با موفقیت اضافه شد!")
         context.user_data['action'] = None
 
 # تنظیم سقف
 async def set_ceiling(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
     if text == "/skip":
-        await update.message.reply_text("قیمت سقف رد شد.\nحالا قیمت کف رو بفرست (یا /skip):")
+        await context.bot.send_message(chat_id=update.effective_chat.id, text="قیمت سقف رد شد.\nحالا قیمت کف رو بفرست (یا /skip):")
         return SET_FLOOR
     
     try:
         ceiling = float(text.replace(',', ''))
         symbol = context.user_data['selected_symbol']
-        user_id = update.message.from_user.id
+        user_id = update.effective_user.id
         c.execute("UPDATE coins SET ceiling=? WHERE user_id=? AND coin_symbol=?", (ceiling, user_id, symbol))
         conn.commit()
-        await update.message.reply_text(f"سقف `${ceiling:,.2f}` ثبت شد.\nحالا قیمت کف رو بفرست (یا /skip):")
+        await context.bot.send_message(chat_id=update.effective_chat.id, text=f"سقف `${ceiling:,.2f}` ثبت شد.\nحالا قیمت کف رو بفرست (یا /skip):")
         return SET_FLOOR
     except:
-        await update.message.reply_text("عدد معتبر بنویس! مثال: 70000")
+        await context.bot.send_message(chat_id=update.effective_chat.id, text="عدد معتبر بنویس! مثال: 70000")
 
 # تنظیم کف
 async def set_floor(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
     symbol = context.user_data['selected_symbol']
     name = context.user_data['selected_name']
-    user_id = update.message.from_user.id
+    user_id = update.effective_user.id
     
     if text != "/skip":
         try:
             floor = float(text.replace(',', ''))
             c.execute("UPDATE coins SET floor=? WHERE user_id=? AND coin_symbol=?", (floor, user_id, symbol))
             conn.commit()
-            await update.message.reply_text(f"کف `${floor:,.2f}` برای {name} ثبت شد!\nهشدار فعال شد.")
+            await context.bot.send_message(chat_id=update.effective_chat.id, text=f"کف `${floor:,.2f}` برای {name} ثبت شد!\nهشدار فعال شد.")
         except:
-            await update.message.reply_text("عدد معتبر بنویس!")
+            await context.bot.send_message(chat_id=update.effective_chat.id, text="عدد معتبر بنویس!")
     else:
-        await update.message.reply_text(f"تنظیمات برای {name} ذخیره شد.")
+        await context.bot.send_message(chat_id=update.effective_chat.id, text=f"تنظیمات برای {name} ذخیره شد.")
     
     await start(update, context)
     return ConversationHandler.END
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("عملیات لغو شد.")
+    await context.bot.send_message(chat_id=update.effective_chat.id, text="عملیات لغو شد.")
     await start(update, context)
     return ConversationHandler.END
 
@@ -255,7 +250,7 @@ async def main_async():
 
     # فعال‌سازی JobQueue
     if app.job_queue:
-        crontab('*/2 * * * *', check_alerts)(app.job_queue)
+        app.job_queue.run_repeating(check_alerts, interval=120, first=0)
         print("JobQueue فعال شد - هشدار هر ۲ دقیقه چک می‌شه")
     else:
         print("JobQueue در دسترس نیست")
